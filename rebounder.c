@@ -10,11 +10,16 @@
 // TODO implement delete-on-report
 // TODO implement alarm-on-report
 // TODO implement basic sanity checks
-//
-// TODO transformar o void callbackdata em tx_data e tx_state para evitar passar os params como globais
 
-struct gn_statemachine *rx_state2 = NULL;
+struct gn_statemachine *rx_state = NULL;
+struct gn_statemachine *tx_state = NULL;
 int running = 1;
+
+struct tx_pack {
+    char* destnumber;
+    gn_data *data;
+    struct gn_statemachine *state;
+};
 
 void interrupted(int sig)
 {
@@ -31,8 +36,8 @@ void busterminate(struct gn_statemachine *state)
 
 void terminate_rxtx(void)
 {
-    busterminate(rx_state2);
- //   busterminate(tx_state);
+    busterminate(rx_state);
+    busterminate(tx_state);
 }
 
 static int businit(const char *configfile, const char *configmodel, struct gn_statemachine **state, gn_data *data)
@@ -57,7 +62,7 @@ static int businit(const char *configfile, const char *configmodel, struct gn_st
     return 0;
 }
 
-static gn_error sendsms(gn_statemachine *state, gn_data *data, char* msg, char* srcnumber, const char* destnumber)
+static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg, char* srcnumber, char *destnumber)
 {
 
     gn_sms sms;
@@ -70,13 +75,13 @@ static gn_error sendsms(gn_statemachine *state, gn_data *data, char* msg, char* 
     gn_sms_default_submit(&sms);
 
     snprintf(sms.remote.number, sizeof(sms.remote.number), "%s", destnumber);
-    sms.remote.type = get_number_type(sms.remote.number);
+    sms.remote.type = GN_GSM_NUMBER_Unknown;
 	if (sms.remote.type == GN_GSM_NUMBER_Alphanumeric) {
 		fprintf(stderr, _("Invalid phone number\n"));
 		return GN_ERR_WRONGDATAFORMAT;
 	}
 
-    sms.delivery_report = true;
+    sms.delivery_report = 1;
     sms.validity = 11520; /* 1 week */
 
     /* get smsc number */
@@ -102,8 +107,6 @@ static gn_error sendsms(gn_statemachine *state, gn_data *data, char* msg, char* 
     data->sms = &sms;
 
     error = gn_sms_send(data, state);
-
-    
     
     if (error == GN_ERR_NONE) {
 		if (sms.parts > 1) {
@@ -126,23 +129,31 @@ static gn_error sendsms(gn_statemachine *state, gn_data *data, char* msg, char* 
 
 static gn_error handlesms(gn_sms *message, struct gn_statemachine *state, void *callbackdata)
 {
+    gn_error error;
     fprintf(stdout, "LOL pint\n");
-    char *s = message->user_data[0].u.text;
 
-    char number[GN_BCD_STRING_MAX_LENGTH];
+    // get the callbackdata
+    struct tx_pack* _callbackdata = (struct tx_pack*)callbackdata;
+    struct gn_statemachine *_tx_state = (struct gn_statemachine*)_callbackdata->state;
+    gn_data *tx_data = _callbackdata->data;
+    char* destnumber = _callbackdata->destnumber;
+
+    char *msg = message->user_data[0].u.text;
+
+    char srcnumber[GN_BCD_STRING_MAX_LENGTH];
     char *p = message->remote.number;
 
     int i = message->number;
     
-    snprintf(number, sizeof(number), "%s", p);
-    fprintf(stderr, _("SMS received from number: %s\n"), number);
+    snprintf(srcnumber, sizeof(srcnumber), "%s", p);
+    fprintf(stderr, _("SMS received from number: %s\n"), srcnumber);
 
-    fprintf(stderr, _("Got message %d: %s\n"), i, s);
+    fprintf(stderr, _("Got message %d: %s\n"), i, msg);
 
     //TODO log msg
 
     // send msg
-    if ((error = sendsms(tx_state, tx_data, srcnumber, destnumber) != GN_ERR_NONE)) {
+    if ((error = sendsms(_tx_state, tx_data, msg, srcnumber, destnumber) != GN_ERR_NONE)) {
             fprintf(stderr, _("Error sending the message\n"));
             return error;
     }
@@ -155,33 +166,37 @@ static gn_error handlesms(gn_sms *message, struct gn_statemachine *state, void *
 
 int main(int argc, char *argv[])
 {
-    struct gn_statemachine *rx_state = NULL;
-    struct gn_statemachine *tx_state = NULL;
 
     gn_data rx_data;
     gn_data tx_data;
 
     gn_error error;
+    char* destnumber;
+    struct tx_pack* callback_pack = (struct tx_pack*)malloc(sizeof(struct tx_pack*));
     
-    if (argc != 3) {
-        fprintf(stderr, _("Usage: %s <receiver_configfile> <transmiter configfile>\n"), argv[0]);
+    if (argc != 4) {
+        fprintf(stderr, _("Usage: %s <receiver_configfile> <transmiter configfile> <destination number>\n"), argv[0]);
         return 1;
     }
 
     fprintf(stdout, "1: %s\n 2: %s\n", argv[1] ,argv[2]);
+
+    //TODO verify the number format
+    destnumber = argv[3];
 
     businit(argv[1], NULL, &rx_state, &rx_data);
 //    businit(argv[2], NULL, tx_state, &tx_data);
     
     atexit(terminate_rxtx);
 
-    rx_state2 = rx_state;
-
     //gn_data_clear(&rx_data);
     //rx_data = rx_state->sm_data;
 
     rx_data.on_sms = &handlesms;
-    rx_data.callback_data = NULL;
+    callback_pack->destnumber = destnumber;
+    callback_pack->state = tx_state;
+    callback_pack->data = &tx_data;
+    rx_data.callback_data = (void*)callback_pack;
     error = gn_sm_functions(GN_OP_OnSMS, &rx_data, rx_state);
 
     signal(SIGINT, interrupted);
