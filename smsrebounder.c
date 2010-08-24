@@ -6,6 +6,10 @@
 /* prepare for i18n */
 #define _(x) x // TODO test and search about this
 
+#define DEBUG 3
+#define EVENT 2
+#define ERROR 1
+
 // TODO test multipart sms
 // TODO implement delete-on-report
 // TODO implement alarm-on-report
@@ -13,6 +17,8 @@
 
 struct gn_statemachine *rx_state = NULL;
 struct gn_statemachine *tx_state = NULL;
+int loglevel = DEBUG;
+char* logfile;
 int running = 1;
 
 struct tx_pack {
@@ -20,6 +26,33 @@ struct tx_pack {
     gn_data *data;
     struct gn_statemachine *state;
 };
+
+void logprintf(int level, const char* restrict format, ...)
+{
+    if (loglevel < level) {
+        return;
+    }
+
+    //timestamp
+    time_t _time;
+    struct tm* ltime;
+    char timestamp[30];
+    _time = time(NULL);
+    ltime = localtime(&_time);
+    sprintf(timestamp, "[%d/%d/%d - %d:%d:%d] ", ltime->tm_mday,
+                                                 ltime->tm_mon,
+                                                 ltime->tm_year,
+                                                 ltime->tm_hour,
+                                                 ltime->tm_min,
+                                                 ltime->tm_sec);
+
+    fprintf(logfile, "%s", timestamp);
+    va_list args;
+    va_start(args, format);
+    fprintf(logfile, _(format), args);
+    va_end(args);
+
+}
 
 void interrupted(int sig)
 {
@@ -37,24 +70,27 @@ void busterminate(struct gn_statemachine *state)
 void terminate_rxtx(void)
 {
     busterminate(rx_state);
+    logprintf(DEBUG, "Terminated RX device");
     busterminate(tx_state);
+    logprintf(DEBUG, "Terminated TX device");
 }
 
 static int businit(const char *configfile, const char *configmodel, struct gn_statemachine **state, gn_data *data)
 {
+    logprintf(DEBUG, "Initiating device using config at %s", configfile);
     gn_error err;
 
     if ((err = gn_lib_phoneprofile_load_from_file(configfile, configmodel, state)) != GN_ERR_NONE) {
-        fprintf(stderr, "lol %s\n", gn_error_print(err));
+        logprintf(ERROR, "Error reading device configfile: %s", gn_error_print(err));
         if (configfile)
-            fprintf(stderr, _("File: %s\n"), configfile);
+            logprintf(DEBUG, "Config file: %s", configfile);
         if (configmodel)
-            fprintf(stderr, _("Phone section: [phone_%s]\n"), configmodel);
+            logprintf(DEBUG, "Config model: %s", configmodel);
         return 2;
     }
 
     if ((err = gn_lib_phone_open(*state)) != GN_ERR_NONE) {
-        fprintf(stderr, "bode2 %s\n", gn_error_print(err));
+        logprintf(ERROR, "Error initializing device: %s", gn_error_print(err));
         return 2;
     }
    data = &((**state).sm_data);
@@ -77,7 +113,6 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
     snprintf(sms.remote.number, sizeof(sms.remote.number), "%s", destnumber);
     sms.remote.type = GN_GSM_NUMBER_Unknown;
 	if (sms.remote.type == GN_GSM_NUMBER_Alphanumeric) {
-		fprintf(stderr, _("Invalid phone number\n"));
 		return GN_ERR_WRONGDATAFORMAT;
 	}
 
@@ -92,7 +127,7 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
 			snprintf(sms.smsc.number, sizeof(sms.smsc.number), "%s", data->message_center->smsc.number);
 			sms.smsc.type = data->message_center->smsc.type;
 		} else {
-			fprintf(stderr, _("Cannot read the SMSC number from your phone. If the sms send will fail, please use --smsc option explicitely giving the number.\n"));
+            logprintf(DEBUG, "Cannot read the SMSC number from the device.");
 		}
 		free(data->message_center);
 	}
@@ -106,22 +141,24 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
 
     data->sms = &sms;
 
-    error = gn_sms_send(data, state);
+    while((error = gn_sms_send(data, state)) != GN_ERR_NONE)
+        logprintf(ERROR, "Error sending message: %s - retries left: %d", gn_error_print(error), retries--);
     
     if (error == GN_ERR_NONE) {
 		if (sms.parts > 1) {
 			int j;
-			fprintf(stderr, _("Message sent in %d parts with reference numbers:"), sms.parts);
+            char references[sms.parts*10];
+			sprintf(references, _("Message sent in %d parts with reference numbers:"), sms.parts);
 			for (j = 0; j < sms.parts; j++)
-				fprintf(stderr, " %d", sms.reference[j]);
-			fprintf(stderr, "\n");
+				sprintf(references, " %d", sms.reference[j]);
+
+            logprintf(DEBUG, "Sent message in %d parts: %s", sms.parts, references);
 		} else
-			fprintf(stderr, _("Send succeeded with reference %d!\n"), sms.reference[0]);
-	} else
-		fprintf(stderr, _("SMS Send failed (%s)\n"), gn_error_print(error));
+            logprintf(DEBUG, "Sent message in 1 part: %s", sms.reference[0]);
+        logprintf(EVENT, "Message sent to %d - %s", destnumber, msg);
+	}
 
 	free(sms.reference);
-
 
     return error;
 }
@@ -130,7 +167,6 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
 static gn_error handlesms(gn_sms *message, struct gn_statemachine *state, void *callbackdata)
 {
     gn_error error;
-    fprintf(stdout, "LOL pint\n");
 
     // get the callbackdata
     struct tx_pack* _callbackdata = (struct tx_pack*)callbackdata;
@@ -146,16 +182,14 @@ static gn_error handlesms(gn_sms *message, struct gn_statemachine *state, void *
     int i = message->number;
     
     snprintf(srcnumber, sizeof(srcnumber), "%s", p);
-    fprintf(stderr, _("SMS received from number: %s\n"), srcnumber);
 
-    fprintf(stderr, _("Got message %d: %s\n"), i, msg);
-
-    //TODO log msg
+    logprintf(DEBUG, "Got message on slot %d", i);
+    logprintf(EVENT, "Message received from %s - %s", srcnumber, msg);
 
     // send msg
     if ((error = sendsms(_tx_state, tx_data, msg, srcnumber, destnumber) != GN_ERR_NONE)) {
-            fprintf(stderr, _("Error sending the message\n"));
-            return error;
+        logprintf(ERROR, "Error sending message on slot %d: %s", i, msg);
+        // TODO message sending failed, should send by email or any other extreme method
     }
 
     //TODO delete msg
@@ -174,18 +208,24 @@ int main(int argc, char *argv[])
     char* destnumber;
     struct tx_pack* callback_pack = (struct tx_pack*)malloc(sizeof(struct tx_pack*));
     
-    if (argc != 4) {
-        fprintf(stderr, _("Usage: %s <receiver_configfile> <transmiter configfile> <destination number>\n"), argv[0]);
+    if (argc < 4 || argc > 5) {
+        fprintf(stderr, _("Usage: %s <receiver_configfile> <transmiter configfile> <destination number> [/path/to/logfile]\n"), argv[0]);
         return 1;
     }
 
-    fprintf(stdout, "1: %s\n 2: %s\n", argv[1] ,argv[2]);
-
     //TODO verify the number format
     destnumber = argv[3];
+    
+    // TODO check if logfile exists and is writable
+    // TODO use a default logfile
+    logfile = "/var/log/smsrebounder.log"
+    loglevel = DEBUG;
 
+
+    logprintf(DEBUG, "Initiating RX device");
     businit(argv[1], NULL, &rx_state, &rx_data);
-//    businit(argv[2], NULL, tx_state, &tx_data);
+    logprintf(DEBUG, "Initiating TX device");
+    businit(argv[2], NULL, &tx_state, &tx_data);
     
     atexit(terminate_rxtx);
 
@@ -204,9 +244,8 @@ int main(int argc, char *argv[])
     while (running)
         gn_sm_loop(1, rx_state);
 
-    fprintf(stdout, _("terminated\n"));
+    logprinf(EVENT, "Program terminated.");
 
     return 0;
 }
-
 
