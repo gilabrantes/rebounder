@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <gnokii.h>
 
@@ -18,7 +19,7 @@
 struct gn_statemachine *rx_state = NULL;
 struct gn_statemachine *tx_state = NULL;
 int loglevel = DEBUG;
-char* logfile;
+FILE* logfile;
 int running = 1;
 
 struct tx_pack {
@@ -27,7 +28,7 @@ struct tx_pack {
     struct gn_statemachine *state;
 };
 
-void logprintf(int level, const char* restrict format, ...)
+void logprintf(int level, const char *__restrict format, ...)
 {
     if (loglevel < level) {
         return;
@@ -103,6 +104,7 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
 
     gn_sms sms;
     gn_error error;
+    int retries = 5;
 
     /* The maximum length of an uncompressed concatenated short message is
 	   255 * 153 = 39015 default alphabet characters => as in gnokii-sms.c */ 
@@ -141,8 +143,11 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
 
     data->sms = &sms;
 
-    while((error = gn_sms_send(data, state)) != GN_ERR_NONE)
+    while((error = gn_sms_send(data, state)) != GN_ERR_NONE) {
         logprintf(ERROR, "Error sending message: %s - retries left: %d", gn_error_print(error), retries--);
+        // sleep between retires
+        sleep(5);
+    }
     
     if (error == GN_ERR_NONE) {
 		if (sms.parts > 1) {
@@ -218,7 +223,7 @@ int main(int argc, char *argv[])
     
     // TODO check if logfile exists and is writable
     // TODO use a default logfile
-    logfile = "/var/log/smsrebounder.log"
+    logfile = fopen("/var/log/smsrebounder.log", "a+");
     loglevel = DEBUG;
 
 
@@ -244,7 +249,9 @@ int main(int argc, char *argv[])
     while (running)
         gn_sm_loop(1, rx_state);
 
-    logprinf(EVENT, "Program terminated.");
+    fclose(logfile);
+
+    logprintf(EVENT, "Program terminated.");
 
     return 0;
 }
