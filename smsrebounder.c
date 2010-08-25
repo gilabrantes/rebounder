@@ -4,9 +4,6 @@
 
 #include <gnokii.h>
 
-/* prepare for i18n */
-#define _(x) x // TODO test and search about this
-
 #define DEBUG 3
 #define EVENT 2
 #define ERROR 1
@@ -50,7 +47,7 @@ void logprintf(int level, const char *__restrict format, ...)
     fprintf(logfile, "%s", timestamp);
     va_list args;
     va_start(args, format);
-    fprintf(logfile, _(format), args);
+    fprintf(logfile, format, args);
     va_end(args);
 
 }
@@ -153,7 +150,7 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
 		if (sms.parts > 1) {
 			int j;
             char references[sms.parts*10];
-			sprintf(references, _("Message sent in %d parts with reference numbers:"), sms.parts);
+			sprintf(references, "Message sent in %d parts with reference numbers:", sms.parts);
 			for (j = 0; j < sms.parts; j++)
 				sprintf(references, " %d", sms.reference[j]);
 
@@ -214,7 +211,7 @@ int main(int argc, char *argv[])
     struct tx_pack* callback_pack = (struct tx_pack*)malloc(sizeof(struct tx_pack*));
     
     if (argc < 4 || argc > 5) {
-        fprintf(stderr, _("Usage: %s <receiver_configfile> <transmiter configfile> <destination number> [/path/to/logfile]\n"), argv[0]);
+        fprintf(stderr, "Usage: %s <receiver_configfile> <transmiter configfile> <destination number> [/path/to/logfile]\n", argv[0]);
         return 1;
     }
 
