@@ -47,8 +47,12 @@ void logprintf(int level, const char *__restrict format, ...)
     fprintf(logfile, "%s", timestamp);
     va_list args;
     va_start(args, format);
-    fprintf(logfile, format, args);
+    vfprintf(logfile, format, args);
     va_end(args);
+    fprintf(logfile, "\n");
+
+    if (level == DEBUG)
+        fflush(logfile);
 
 }
 
@@ -69,8 +73,8 @@ void terminate_rxtx(void)
 {
     busterminate(rx_state);
     logprintf(DEBUG, "Terminated RX device");
-    busterminate(tx_state);
-    logprintf(DEBUG, "Terminated TX device");
+    //busterminate(tx_state);
+    //logprintf(DEBUG, "Terminated TX device");
 }
 
 static int businit(const char *configfile, const char *configmodel, struct gn_statemachine **state, gn_data *data)
@@ -91,7 +95,7 @@ static int businit(const char *configfile, const char *configmodel, struct gn_st
         logprintf(ERROR, "Error initializing device: %s", gn_error_print(err));
         return 2;
     }
-   data = &((**state).sm_data);
+   //data = &((*state)->sm_data);
 
     return 0;
 }
@@ -168,6 +172,7 @@ static gn_error sendsms(struct gn_statemachine *state, gn_data *data, char* msg,
 
 static gn_error handlesms(gn_sms *message, struct gn_statemachine *state, void *callbackdata)
 {
+    logprintf(DEBUG, "New message!");
     gn_error error;
 
     // get the callbackdata
@@ -183,17 +188,19 @@ static gn_error handlesms(gn_sms *message, struct gn_statemachine *state, void *
 
     int i = message->number;
     
+    logprintf(DEBUG, "printing srcnumber!");
     snprintf(srcnumber, sizeof(srcnumber), "%s", p);
 
     logprintf(DEBUG, "Got message on slot %d", i);
     logprintf(EVENT, "Message received from %s - %s", srcnumber, msg);
 
     // send msg
+    /*
     if ((error = sendsms(_tx_state, tx_data, msg, srcnumber, destnumber) != GN_ERR_NONE)) {
         logprintf(ERROR, "Error sending message on slot %d: %s", i, msg);
         // TODO message sending failed, should send by email or any other extreme method
     }
-
+*/
     //TODO delete msg
 
     return GN_ERR_NONE;
@@ -220,14 +227,17 @@ int main(int argc, char *argv[])
     
     // TODO check if logfile exists and is writable
     // TODO use a default logfile
-    logfile = fopen("/var/log/smsrebounder.log", "a+");
+    logfile = fopen(argv[4], "a+");
     loglevel = DEBUG;
-
 
     logprintf(DEBUG, "Initiating RX device");
     businit(argv[1], NULL, &rx_state, &rx_data);
-    logprintf(DEBUG, "Initiating TX device");
-    businit(argv[2], NULL, &tx_state, &tx_data);
+    rx_data = rx_state->sm_data;
+
+    logprintf(DEBUG, "Phone model: %s", (rx_state->config.model));
+    logprintf(DEBUG, "Phone model: %d", (rx_state->sm_data));
+    //logprintf(DEBUG, "Initiating TX device");
+    //businit(argv[2], NULL, &tx_state, &tx_data);
     
     atexit(terminate_rxtx);
 
